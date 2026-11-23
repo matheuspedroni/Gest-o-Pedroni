@@ -207,7 +207,7 @@ body.arrastando{user-select:none;-webkit-user-select:none;overflow-anchor:none}
 // Firebase: mesmo projeto do FROTA e do motor (gestao-de-frota-pedroni),
 // dados no ramo /gestao. Lê do motor: custos/mp/produtos e custos/mo/prodReal.
 // =====================================================================
-const VERSAO = 'v5';
+const VERSAO = 'v6';
 const firebaseConfig = {
   apiKey: "AIzaSyBqX8iLAtPTPHMIIHEBg3sGsDPVdHKq24U",
   authDomain: "gestao-de-frota-pedroni.firebaseapp.com",
@@ -230,7 +230,7 @@ async function loadFirebase(){
     ]);
     const app = appMod.initializeApp(firebaseConfig);
     db = dbMod.getDatabase(app);
-    fb = {ref:dbMod.ref, onValue:dbMod.onValue, set:dbMod.set, remove:dbMod.remove, get:dbMod.get};
+    fb = {ref:dbMod.ref, onValue:dbMod.onValue, set:dbMod.set, remove:dbMod.remove, get:dbMod.get, update:dbMod.update};
     return true;
   }catch(e){ console.warn('Firebase não carregou — modo demo:', e.message); return false; }
 }
@@ -396,6 +396,8 @@ function finSemana(ini){
 
 // ---------- AJUDAS ("?") ----------
 const AJUDAS={
+ cli_imp:{t:'Importar clientes',c:'<p>Exporte a lista de clientes do seu <b>sistema de notas</b> (Excel ou CSV) e escolha o arquivo aqui. O app reconhece as colunas sozinho, mostra uma prévia e grava todos de uma vez.</p><p>Pode importar de novo sempre que quiser: quem já existe é <b>atualizado</b> (pelo código, CPF/CNPJ ou nome), não duplica. O que você preencheu aqui, como o local da obra, não é apagado.</p>'},
+ cli_imp_col:{t:'Colunas',c:'<p>Para cada informação, o app escolheu a coluna do arquivo que parece certa. Confira e troque se precisar.</p><p>Rua, número, complemento, bairro e CEP são juntados num endereço só; cidade e UF viram "Cidade / UF".</p><div class="ex">Na próxima importação do mesmo formato, o app lembra destas escolhas.</div>'},
  h_log:{t:'Entregas',c:'<p>A folha de entregas do dia, com <b>Manhã</b> e <b>Tarde</b>, como a prancheta.</p><p>Cada entrega é um cartão. Para reagendar, é só <b>arrastar</b> o cartão.</p>'},
  log_folha:{t:'Folha do dia',c:'<p>Use a faixa de dias no topo para escolher o dia (◀ ▶ troca de semana). O número embaixo de cada dia é quantas entregas ele tem.</p><p>Toque num cartão para abrir e editar. <b>⎙ Folha do dia</b> gera o PDF para imprimir e entregar aos motoristas.</p>'},
  log_arrastar:{t:'Como arrastar',c:'<p><b>No celular:</b> segure o dedo no cartão por meio segundo até ele "levantar" e arraste. <b>No PC:</b> clique e arraste.</p><p><b>Solte em Manhã ou Tarde</b> → muda o período.</p><p><b>Solte num dia da faixa do topo</b> → muda o dia (mantém o período).</p><p><b>Solte em cima de outra entrega</b> → junta as duas na mesma <b>carga</b> (mesmo caminhão).</p><p><b>Solte em "Sem data"</b> → fica a reagendar.</p><div class="ex">Errou? Aparece um aviso embaixo com <b>Desfazer</b> por alguns segundos.</div>'},
@@ -460,6 +462,7 @@ function fecharAjuda(){ $('help-pop').classList.remove('on'); $('help-bd').class
 let _pickCb=null, _pickPreco=false;
 function abrirPicker(cb, mostrarPreco){
   _pickCb=cb; _pickPreco=!!mostrarPreco;
+  $('pk-t').textContent='Escolher produto'; $('pk-busca').placeholder='filtrar (ex.: laje 1,70)…'; $('pk-busca').oninput=pkRender;
   $('pk-busca').value=''; pkRender(); $('picker').classList.add('on'); $('pk-lista').scrollTop=0;
 }
 function fecharPicker(){ $('picker').classList.remove('on'); _pickCb=null; }
@@ -698,6 +701,7 @@ function eeRender(){
   h+='<div class="g2"><div><label class="f">Data'+hq('log_data')+'</label><input type="date" value="'+(e.data||'')+'" onchange="EE.data=this.value"></div>'+
      '<div><label class="f">Ordem no período</label><select onchange="EE.ordem=this.value">'+['','1','2','3','4','5','6'].map(o=>'<option value="'+o+'"'+(String(e.ordem||'')===o?' selected':'')+'>'+(o?o+'º':'—')+'</option>').join('')+'</select></div></div>';
   h+='<label class="f">Período</label><div class="seg" id="ee-per">'+['manha','tarde'].map(p=>'<button class="'+(e.periodo===p?'on':'')+'" onclick="EE.periodo=\''+p+'\';segOn(\'ee-per\',this)">'+PER[p]+'</button>').join('')+'</div>';
+  if(Object.keys(S.clientes).length) h+='<button type="button" class="pickf vazio" style="margin-top:10px" onclick="abrirPickerCli(eeCli)"><span>Escolher cliente cadastrado…</span><b>▾</b></button>';
   h+='<div class="g2"><div><label class="f">Cliente</label><input list="dl-pess" value="'+esc(e.cliente)+'" oninput="EE.cliente=this.value"></div><div><label class="f">Código / pedido'+hq('log_codigo')+'</label><input value="'+esc(e.codigo)+'" oninput="EE.codigo=this.value"></div></div>';
   h+='<div class="g2"><div><label class="f">Destino (bairro / cidade)</label><input value="'+esc(e.destino)+'" oninput="EE.destino=this.value" placeholder="ex.: Charqueadas"></div><div><label class="f">Telefone</label><input value="'+esc(e.fone)+'" oninput="EE.fone=this.value"></div></div>';
   h+='<label class="f">Produtos'+hq('log_itens')+'</label>'+
@@ -716,6 +720,7 @@ function eeRender(){
      (e.id?'<button class="btn bad" style="margin-left:auto" onclick="if(confirm(\'Excluir esta entrega?\')){excluir(\'entregas\',EE.id);limparCargas();fecharModal()}">Excluir</button>':'')+'</div>';
   abrirModal(h);
 }
+function eeCli(c){ EE.cliente=c.nome||''; EE.codigo=EE.codigo||c.codigo||''; EE.fone=c.fone||EE.fone||''; EE.destino=EE.destino||c.obra||c.cidade||''; eeRender(); }
 function salvarEntrega(){
   const e=EE;
   if(!String(e.cliente||'').trim()){ alert('Informe o cliente.'); return; }
@@ -777,6 +782,199 @@ function pdfFolhaDia(d){
   });
   abrirImpressao('Entregas '+fmtD(d), h+rodape());
 }
+
+// =====================================================================
+// IMPORTAR CLIENTES (arquivo do sistema de notas: Excel .xlsx/.xls ou CSV/TXT)
+// Reconhece as colunas pelo nome do cabeçalho; você confere/ajusta antes de gravar.
+// =====================================================================
+const IMP_CAMPOS=[
+  ['nome','Nome / razão social',['razaosocial','nomerazaosocial','razao','nome','nomecliente','cliente','nomecompleto','destinatario']],
+  ['fantasia','Nome fantasia',['nomefantasia','fantasia','apelido']],
+  ['codigo','Código no sistema',['codigo','codcliente','codigocliente','cod','idcliente','id','cadastro']],
+  ['doc','CPF / CNPJ',['cpfcnpj','cnpjcpf','cnpj','cpf','documento','cgc','cgccpf','cpfcgc','doc']],
+  ['fone','Telefone',['telefone','fone','telefone1','fone1','tel','telefones','telcomercial','fonecomercial']],
+  ['cel','Celular / WhatsApp',['celular','whatsapp','telefone2','fone2','cel','movel']],
+  ['email','E-mail',['email','emailnfe','emailprincipal','mail']],
+  ['logr','Endereço (rua)',['endereco','logradouro','rua','enderecocompleto','end']],
+  ['num','Número',['numero','num','nro','no','n']],
+  ['compl','Complemento',['complemento','compl']],
+  ['bairro','Bairro',['bairro']],
+  ['cidade','Cidade',['cidade','municipio','nomemunicipio','nomecidade']],
+  ['uf','UF',['uf','estado','siglauf']],
+  ['cep','CEP',['cep']]
+];
+const _normH = s => String(s==null?'':s).normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'');
+const _dig = s => String(s||'').replace(/\D/g,'');
+let IMP=null;
+
+function abrirImportCli(){
+  IMP={linhas:null, cab:[], ini:0, mapa:{}, nomeArq:''};
+  abrirModal('<h2>Importar clientes'+hq('cli_imp')+'<button class="ico x" onclick="fecharModal()">✕</button></h2>'+
+    '<div class="infobox">Escolha o arquivo de clientes exportado do seu sistema de notas: <b>Excel (.xlsx / .xls)</b> ou <b>CSV / TXT</b>. Antes de gravar, você confere as colunas e uma prévia.</div>'+
+    '<input type="file" accept=".csv,.txt,.xls,.xlsx,.ods,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onchange="impLer(this)">'+
+    '<div id="imp-corpo" style="margin-top:12px"></div>');
+}
+async function impLer(inp){
+  const f=inp.files&&inp.files[0]; if(!f) return;
+  IMP.nomeArq=f.name; $('imp-corpo').innerHTML='<div class="mut">Lendo '+esc(f.name)+'…</div>';
+  try{
+    const buf=await f.arrayBuffer();
+    let linhas;
+    if(/\.(xlsx|xls|ods)$/i.test(f.name)){
+      const XLSX=await carregarXLSX();
+      const wb=XLSX.read(buf,{type:'array'});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      linhas=XLSX.utils.sheet_to_json(ws,{header:1,raw:false,defval:''});
+    }else{
+      linhas=parseCSV(decodificar(buf));
+    }
+    linhas=linhas.map(r=>r.map(c=>String(c==null?'':c).trim())).filter(r=>r.some(c=>c));
+    if(!linhas.length){ $('imp-corpo').innerHTML='<div class="warnbox">O arquivo está vazio.</div>'; return; }
+    IMP.linhas=linhas;
+    IMP.ini=acharCabecalho(linhas);
+    IMP.cab=linhas[IMP.ini].map((c,i)=>c||('Coluna '+(i+1)));
+    const salvo=(S.config.importClientes||{})[assinatura(IMP.cab)];
+    IMP.mapa=salvo?Object.assign({},salvo):autoMapa(IMP.cab);
+    impRender();
+  }catch(e){
+    console.error(e);
+    $('imp-corpo').innerHTML='<div class="warnbox">Não consegui ler o arquivo: '+esc(e.message)+'. Se for Excel, tente salvar como CSV e importar de novo — ou me mande o arquivo.</div>';
+  }
+}
+function carregarXLSX(){
+  if(window.XLSX) return Promise.resolve(window.XLSX);
+  return new Promise((ok,err)=>{ const s=document.createElement('script'); s.src='https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+    s.onload=()=>ok(window.XLSX); s.onerror=()=>err(new Error('sem internet para abrir Excel')); document.head.appendChild(s); });
+}
+// sistemas de nota no Brasil costumam gravar em Windows-1252 (acentos); tenta UTF-8 primeiro
+function decodificar(buf){
+  let t=new TextDecoder('utf-8').decode(buf);
+  if(t.includes('�')){ try{ t=new TextDecoder('windows-1252').decode(buf); }catch(e){} }
+  return t.replace(/^﻿/,'');
+}
+function parseCSV(txt){
+  const amostra=txt.split(/\r?\n/).slice(0,10).join('\n');
+  const seps=[';','\t',',','|']; let sep=';', melhor=-1;
+  seps.forEach(s=>{ const n=amostra.split('\n').map(l=>l.split(s).length-1); const m=Math.min(...n.filter((x,i)=>i<5)); const tot=n.reduce((a,b)=>a+b,0); if(tot>0 && (m*10+tot)>melhor){ melhor=m*10+tot; sep=s; } });
+  const out=[]; let row=[], cel='', q=false;
+  for(let i=0;i<txt.length;i++){
+    const ch=txt[i];
+    if(q){ if(ch==='"'){ if(txt[i+1]==='"'){ cel+='"'; i++; } else q=false; } else cel+=ch; continue; }
+    if(ch==='"' && cel===''){ q=true; continue; }
+    if(ch===sep){ row.push(cel); cel=''; continue; }
+    if(ch==='\n'||ch==='\r'){ if(ch==='\r'&&txt[i+1]==='\n') i++; row.push(cel); out.push(row); row=[]; cel=''; continue; }
+    cel+=ch;
+  }
+  if(cel!==''||row.length){ row.push(cel); out.push(row); }
+  return out;
+}
+function acharCabecalho(L){
+  const chaves=new Set(IMP_CAMPOS.flatMap(c=>c[2]));
+  let best=0, bestN=-1;
+  for(let i=0;i<Math.min(15,L.length);i++){
+    const n=L[i].filter(c=>chaves.has(_normH(c))||IMP_CAMPOS.some(f=>f[2].some(k=>k.length>3&&_normH(c).includes(k)))).length;
+    if(n>bestN){ bestN=n; best=i; }
+  }
+  return bestN>=2?best:0;
+}
+function autoMapa(cab){
+  const H=cab.map(_normH), usado=new Set(), m={};
+  // 1ª passada: nome exato; 2ª: contém
+  [true,false].forEach(exato=>{
+    IMP_CAMPOS.forEach(([k,,pats])=>{
+      if(m[k]!=null) return;
+      for(const p of pats){
+        const i=H.findIndex((h,ix)=>!usado.has(ix) && (exato? h===p : (p.length>2 && h.includes(p))));
+        if(i>=0){ m[k]=i; usado.add(i); break; }
+      }
+    });
+  });
+  return m;
+}
+function assinatura(cab){ return _encKey(cab.map(_normH).join('|')).slice(0,180); }
+function impCliente(r){
+  const g=k=>{ const i=IMP.mapa[k]; return (i==null||i==='')?'':String(r[+i]||'').trim(); };
+  const nome=g('nome')||g('fantasia'); if(!nome) return null;
+  let end=g('logr'); if(g('num')) end+=(end?', ':'')+g('num'); if(g('compl')) end+=' - '+g('compl'); if(g('bairro')) end+=(end?' - ':'')+g('bairro'); if(g('cep')) end+=(end?' · ':'')+'CEP '+g('cep');
+  let cid=g('cidade'); if(g('uf')) cid+=(cid?' / ':'')+g('uf').toUpperCase();
+  const fones=[g('fone'),g('cel')].filter(Boolean);
+  const c={nome, doc:g('doc'), fone:Array.from(new Set(fones)).join(' / '), email:g('email').toLowerCase(), end, cidade:cid, codigo:g('codigo')};
+  if(g('fantasia') && g('fantasia')!==nome) c.fantasia=g('fantasia');
+  return c;
+}
+function impAcharExistente(c, porCod, porDoc, porNome){
+  return (c.codigo&&porCod[c.codigo]) || (_dig(c.doc).length>=11&&porDoc[_dig(c.doc)]) || porNome[c.nome.toLowerCase()];
+}
+function impIndices(){
+  const porCod={}, porDoc={}, porNome={};
+  Object.values(S.clientes).filter(Boolean).forEach(x=>{ if(x.codigo) porCod[x.codigo]=x; const d=_dig(x.doc); if(d.length>=11) porDoc[d]=x; if(x.nome) porNome[x.nome.toLowerCase()]=x; });
+  return {porCod,porDoc,porNome};
+}
+function impCalcular(){
+  const dados=IMP.linhas.slice(IMP.ini+1);
+  const {porCod,porDoc,porNome}=impIndices();
+  const vistos=new Set(); let novos=0, atual=0, iguais=0, sem=0, dup=0; const lista=[];
+  dados.forEach(r=>{
+    const c=impCliente(r); if(!c){ sem++; return; }
+    const chave=c.codigo?'c'+c.codigo:(_dig(c.doc).length>=11?'d'+_dig(c.doc):'n'+c.nome.toLowerCase());
+    if(vistos.has(chave)){ dup++; return; } vistos.add(chave);
+    const ex=impAcharExistente(c,porCod,porDoc,porNome);
+    if(!ex){ novos++; lista.push({c,ex:null}); return; }
+    // atualiza só com o que veio preenchido; não apaga o que já existe (ex.: local da obra)
+    const m=Object.assign({},ex); Object.keys(c).forEach(k=>{ if(c[k]) m[k]=c[k]; });
+    if(JSON.stringify(m)===JSON.stringify(ex)){ iguais++; return; }
+    atual++; lista.push({c:m,ex});
+  });
+  return {lista,novos,atual,iguais,sem,dup,total:dados.length};
+}
+function impRender(){
+  const r=impCalcular();
+  const opts=i=>'<option value="">— não usar —</option>'+IMP.cab.map((c,ix)=>'<option value="'+ix+'"'+(String(i)===String(ix)?' selected':'')+'>'+esc(c)+'</option>').join('');
+  let h='<div class="mut">Arquivo <b>'+esc(IMP.nomeArq)+'</b> · '+r.total+' linha(s) de dados · cabeçalho na linha '+(IMP.ini+1)+'</div>';
+  h+='<div class="grp">Colunas do arquivo'+hq('cli_imp_col')+'</div>';
+  h+='<div class="g2">'+IMP_CAMPOS.map(([k,t])=>'<div><label class="f">'+t+'</label><select onchange="IMP.mapa[\''+k+'\']=this.value===\'\'?null:+this.value;impRender()">'+opts(IMP.mapa[k])+'</select></div>').join('')+'</div>';
+  if(IMP.mapa.nome==null && IMP.mapa.fantasia==null) h+='<div class="warnbox" style="margin-top:10px">Escolha qual coluna é o <b>nome</b> do cliente.</div>';
+  h+='<div class="tot" style="margin-top:12px"><div><small>Novos</small><b class="pos">'+r.novos+'</b></div><div><small>Atualizados</small><b>'+r.atual+'</b></div><div><small>Já iguais</small><b class="mut">'+r.iguais+'</b></div></div>';
+  if(r.sem||r.dup) h+='<div class="mut">'+(r.sem?r.sem+' linha(s) sem nome serão ignoradas. ':'')+(r.dup?r.dup+' repetida(s) no arquivo.':'')+'</div>';
+  h+='<div class="grp">Prévia</div>'+(r.lista.slice(0,6).map(({c,ex})=>'<div class="item" style="cursor:default"><div class="grow"><div class="t">'+esc(c.nome)+(c.codigo?' <span class="mut">('+esc(c.codigo)+')</span>':'')+' '+(ex?'<span class="tag ab">atualiza</span>':'<span class="tag pago">novo</span>')+'</div><div class="s">'+esc([c.doc,c.fone,c.email].filter(Boolean).join(' · '))+'</div><div class="s">'+esc([c.end,c.cidade].filter(Boolean).join(' — '))+'</div></div></div>').join('')||'<div class="empty">Nada novo para gravar</div>');
+  h+='<div class="mfoot"><button class="btn" '+(r.lista.length?'':'disabled style="opacity:.5"')+' onclick="impGravar()">Importar '+r.lista.length+' cliente(s)</button><button class="btn sec" onclick="fecharModal()">Cancelar</button></div>';
+  $('imp-corpo').innerHTML=h;
+}
+function impGravar(){
+  const r=impCalcular(); if(!r.lista.length) return;
+  const lote={};
+  r.lista.forEach(({c,ex})=>{ const id=ex?ex.id:uid()+Math.random().toString(36).slice(2,5); lote[id]=Object.assign({},c,{id}); });
+  salvarLote('clientes', lote);
+  // lembra o mapeamento deste formato de arquivo para a próxima importação
+  const cfg=Object.assign({}, S.config||{}); cfg.importClientes=Object.assign({}, cfg.importClientes||{}); cfg.importClientes[assinatura(IMP.cab)]=IMP.mapa;
+  salvar('config', null, cfg);
+  fecharModal(); sub.orc='cli'; irPara('orc');
+  setTimeout(()=>alert(r.novos+' cliente(s) novo(s) e '+r.atual+' atualizado(s).'),80);
+}
+// grava muitos itens numa só operação no Firebase (update multi-caminho)
+function salvarLote(col, mapa){
+  Object.keys(mapa).forEach(id=>S[col][id]=mapa[id]);
+  if(DEMO){ localStorage.setItem('gestao_'+col, JSON.stringify(S[col])); }
+  else{
+    const up={}; Object.keys(mapa).forEach(id=>up[_encKey(id)]=_sanitizeKeys(mapa[id]));
+    fb.update(fb.ref(db,'gestao/'+col), up).catch(e=>{ console.error(e); alert('Erro ao importar: '+e.message); });
+  }
+  agendaRender();
+}
+// lista de clientes com busca (para orçamento e entregas)
+function abrirPickerCli(cb){
+  _pickCb=cb;
+  $('pk-t').textContent='Escolher cliente'; $('pk-busca').value=''; $('pk-busca').placeholder='buscar por nome, código, CPF/CNPJ ou cidade…';
+  $('pk-busca').oninput=pkCliRender; pkCliRender(); $('picker').classList.add('on'); $('pk-lista').scrollTop=0;
+}
+let _pkCli=[];
+function pkCliRender(){
+  const b=_normH($('pk-busca').value);
+  const todos=Object.values(S.clientes).filter(Boolean).sort((a,c)=>(a.nome||'').localeCompare(c.nome||'','pt-BR'));
+  _pkCli=todos.filter(c=>!b || _normH([c.nome,c.fantasia,c.codigo,c.doc,c.cidade,c.end].join(' ')).includes(b) || (_dig(b).length>=3 && _dig(c.doc).includes(_dig(b)))).slice(0,300);
+  $('pk-lista').innerHTML=_pkCli.length?_pkCli.map((c,i)=>'<div class="pk-i" onclick="pkCliEscolher('+i+')"><span>'+esc(c.nome)+(c.codigo?' <i style="color:var(--txt3)">('+esc(c.codigo)+')</i>':'')+'<br><small style="color:var(--txt3)">'+esc([c.fantasia,c.doc,c.cidade].filter(Boolean).join(' · '))+'</small></span></div>').join('')+(todos.length>300&&_pkCli.length===300?'<div class="empty">Mostrando 300 — digite para filtrar</div>':''):'<div class="empty">Nenhum cliente encontrado</div>';
+}
+function pkCliEscolher(i){ const c=_pkCli[i], cb=_pickCb; fecharPicker(); if(cb&&c) cb(c); }
 
 // =====================================================================
 // RENDER (só desenha — nunca salva)
@@ -940,7 +1138,7 @@ function vOrc(){
   if(sub.orc==='lista'){ h+='<div class="acts"><button class="btn" onclick="abrirOrc()">+ Novo orçamento</button>'+hq('orc_novo')+'</div>'+vOrcLista(); }
   else if(sub.orc==='comp'){ h+='<div class="acts"><button class="btn" onclick="abrirComp()">+ Nova composição</button>'+hq('comp_nome')+'</div>'+vComp(); }
   else if(sub.orc==='precos') h+=vPrecos();
-  else { h+='<div class="acts"><button class="btn" onclick="abrirCli()">+ Novo cliente</button></div>'+vCli(); }
+  else { h+='<div class="acts"><button class="btn" onclick="abrirCli()">+ Novo cliente</button><button class="btn sec" onclick="abrirImportCli()">⬆ Importar arquivo</button>'+hq('cli_imp')+'</div>'+vCli(); }
   return h;
 }
 function vendaTag(v){ return v==='nota'?'<span class="tag nota">c/ nota</span>':v==='semnota'?'<span class="tag semnota">s/ nota</span>':''; }
@@ -973,8 +1171,12 @@ function vPrecos(){
   return h+'</div>';
 }
 function vCli(){
-  const L=Object.values(S.clientes).filter(Boolean).sort((a,b)=>(a.nome||'').localeCompare(b.nome||'','pt-BR'));
-  return '<div class="card">'+(L.length?L.map(c=>'<div class="item" onclick="abrirCli(\''+c.id+'\')"><div class="grow"><div class="t">'+esc(c.nome)+'</div><div class="s">'+esc([c.doc,c.fone,c.cidade].filter(Boolean).join(' · '))+'</div></div></div>').join(''):'<div class="empty">Nenhum cliente. Os clientes dos orçamentos são salvos aqui sozinhos.</div>')+'</div>';
+  const todos=Object.values(S.clientes).filter(Boolean).sort((a,b)=>(a.nome||'').localeCompare(b.nome||'','pt-BR'));
+  const q=_normH(UI.cliBusca||'');
+  const L=todos.filter(c=>!q || _normH([c.nome,c.fantasia,c.codigo,c.doc,c.cidade,c.fone,c.end].join(' ')).includes(q) || (_dig(q).length>=3&&_dig(c.doc).includes(_dig(q))));
+  const vis=L.slice(0,200);
+  return '<div class="card"><input value="'+esc(UI.cliBusca||'')+'" onchange="setUI(\'cliBusca\',this.value)" placeholder="buscar por nome, código, CPF/CNPJ, cidade…"><div class="mut" style="margin-top:6px">'+todos.length+' cliente(s) cadastrado(s)'+(q?' · '+L.length+' encontrado(s)':'')+'</div></div>'+
+   '<div class="card">'+(vis.length?vis.map(c=>'<div class="item" onclick="abrirCli(\''+c.id+'\')"><div class="grow"><div class="t">'+esc(c.nome)+(c.codigo?' <span class="mut">('+esc(c.codigo)+')</span>':'')+'</div><div class="s">'+esc([c.fantasia,c.doc,c.fone,c.cidade].filter(Boolean).join(' · '))+'</div></div></div>').join('')+(L.length>200?'<div class="empty">Mostrando 200 de '+L.length+' — use a busca</div>':''):'<div class="empty">'+(todos.length?'Nenhum cliente encontrado':'Nenhum cliente. Importe o arquivo do sistema de notas ou cadastre um a um.')+'</div>')+'</div>';
 }
 
 // ---------- CONFIG ----------
@@ -1174,7 +1376,7 @@ function salvarComp(){
 
 // ---------- cliente ----------
 let KE=null;
-const CLI_CAMPOS=[['nome','Nome / razão social'],['doc','CPF / CNPJ'],['fone','Telefone'],['email','E-mail'],['end','Endereço'],['cidade','Cidade / UF'],['obra','Local da obra / entrega']];
+const CLI_CAMPOS=[['nome','Nome / razão social'],['codigo','Código no sistema'],['doc','CPF / CNPJ'],['fone','Telefone'],['email','E-mail'],['end','Endereço'],['cidade','Cidade / UF'],['obra','Local da obra / entrega']];
 function abrirCli(id){
   KE=id?Object.assign({},S.clientes[id]):{id:null};
   abrirModal('<h2>'+(id?'Editar cliente':'Novo cliente')+'<button class="ico x" onclick="fecharModal()">✕</button></h2>'+
@@ -1184,7 +1386,7 @@ function abrirCli(id){
 function salvarCli(){
   const c={}; CLI_CAMPOS.forEach(([k])=>c[k]=$('ke-'+k).value.trim());
   if(!c.nome){ alert('Informe o nome.'); return; }
-  c.id=KE.id||uid(); salvar('clientes', c.id, c); fecharModal();
+  c.id=KE.id||uid(); salvar('clientes', c.id, Object.assign({}, KE.id?S.clientes[KE.id]:{}, c)); fecharModal();
 }
 function upsertCliente(cli){
   if(!cli||!cli.nome) return;
@@ -1225,7 +1427,7 @@ function oeRender(){
   h+='<label class="f">Venda'+hq('orc_venda')+'</label><div class="seg" id="oe-venda">'+[['nota','Com nota'],['semnota','Sem nota']].map(([k,t])=>'<button class="'+(o.venda===k?'on':'')+'" onclick="OE.venda=\''+k+'\';segOn(\'oe-venda\',this)">'+t+'</button>').join('')+'</div>'+
     '<div class="mut" style="margin-top:4px">Com nota: o estoque baixa pelo arquivo. Sem nota: ao aprovar, o app dá a saída das peças.</div>';
   h+='<div class="grp">Cliente'+hq('orc_cliente')+'</div>';
-  if(clis.length) h+='<select onchange="oeCli(this.value)"><option value="">— escolher cliente cadastrado —</option>'+clis.map(c=>'<option value="'+c.id+'">'+esc(c.nome)+'</option>').join('')+'</select>';
+  if(clis.length) h+='<button type="button" class="pickf vazio" onclick="abrirPickerCli(oeCliObj)"><span>Escolher cliente cadastrado ('+clis.length+')…</span><b>▾</b></button>';
   h+=CLI_CAMPOS.map(([k,t])=>'<label class="f">'+t+'</label><input id="oc-'+k+'" value="'+esc(cli[k]||'')+'" oninput="OE.cliente.'+k+'=this.value">').join('');
   h+='<div class="grp">Itens'+hq('orc_itens')+'</div>';
   h+=o.itens.length?o.itens.map((i,k)=>'<div class="oel"><div class="nm"><span>'+(i.tipo==='comp'?'<span class="tag nota">composição</span> ':'')+esc(i.nome)+'</span><button class="btn sm sec" onclick="OE.itens.splice('+k+',1);oeRender()">✕</button></div>'+
@@ -1255,6 +1457,7 @@ function oeTot(){
   OE.itens.forEach((i,k)=>{ const el=$('oe-lt-'+k); if(el) el.textContent=fmtR(parseNum(i.qtd)*parseNum(i.unit)); });
   $('oe-tot').innerHTML='<div class="kv">Subtotal<b>'+fmtR(t.sub)+'</b></div>'+(t.desc?'<div class="kv">Desconto<b class="neg">−'+fmtR(t.desc)+'</b></div>':'')+(t.frete?'<div class="kv">Frete<b>'+fmtR(t.frete)+'</b></div>':'')+'<div class="kv big">Total<b>'+fmtR(t.total)+'</b></div>';
 }
+function oeCliObj(c){ OE.cliente={}; CLI_CAMPOS.forEach(([k])=>{ OE.cliente[k]=c[k]||''; const el=$('oc-'+k); if(el) el.value=c[k]||''; }); }
 function oeCli(id){ const c=S.clientes[id]; if(!c) return; OE.cliente={}; CLI_CAMPOS.forEach(([k])=>{ OE.cliente[k]=c[k]||''; $('oc-'+k).value=c[k]||''; }); }
 function oeAddProd(n){
   if(!n) return;
