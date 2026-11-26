@@ -207,7 +207,7 @@ body.arrastando{user-select:none;-webkit-user-select:none;overflow-anchor:none}
 // Firebase: mesmo projeto do FROTA e do motor (gestao-de-frota-pedroni),
 // dados no ramo /gestao. Lê do motor: custos/mp/produtos e custos/mo/prodReal.
 // =====================================================================
-const VERSAO = 'v10';
+const VERSAO = 'v11';
 const firebaseConfig = {
   apiKey: "AIzaSyBqX8iLAtPTPHMIIHEBg3sGsDPVdHKq24U",
   authDomain: "gestao-de-frota-pedroni.firebaseapp.com",
@@ -309,9 +309,12 @@ function iniciarDados(){
   });
   fb.onValue(fb.ref(db,'custos/mp/produtos'), snap=>{
     const v=snap.val();
-    if(v){ const nomes=arr(v).filter(p=>p&&p.nome).map(p=>p.nome); if(nomes.length) EXT.produtos=nomes; }
+    if(v){ const L=arr(v).filter(p=>p&&p.nome); const nomes=L.map(p=>p.nome); if(nomes.length) EXT.produtos=nomes;
+      EXT.idPorNome={}; L.forEach(p=>{ if(p.id!=null) EXT.idPorNome[p.nome]=String(p.id); }); }
     agendaRender();
   });
+  // preço de venda digitado no Preço Final do motor (custos/preco/tabela, chave 'p'+id do produto)
+  fb.onValue(fb.ref(db,'custos/preco/tabela'), snap=>{ EXT.tabelaMotor=_desanitizeKeys(snap.val()||{})||{}; agendaRender(); });
   fb.onValue(fb.ref(db,'custos/mo/prodReal'), snap=>{ EXT.prodReal=_desanitizeKeys(snap.val()||{})||{}; agendaRender(); });
   fb.onValue(fb.ref(db,'.info/connected'), s=>setSync(s.val()?'ok':'off'));
 }
@@ -348,7 +351,10 @@ function categoria(n){
   if(/^(PAVER|PISO)/.test(s)) return 'Pisos e pavers';
   return 'Outros';
 }
-const precoProd = n => Number(S.precos[n])||0;
+// preço do produto: 1º o preço de venda do motor (Preço Final); se não tiver, o da tabela da gestão
+function precoMotor(n){ const id=(EXT.idPorNome||{})[n]; if(id==null) return 0; const v=parseFloat((EXT.tabelaMotor||{})['p'+id]); return v>0?v:0; }
+const precoGestao = n => Number(S.precos[n])||0;
+const precoProd = n => precoMotor(n) || precoGestao(n);
 function precoComp(c){ return arr(c&&c.itens).reduce((s,i)=>s+(Number(i.qtd)||0)*precoProd(i.produto),0); }
 function compSemPreco(c){ return arr(c&&c.itens).filter(i=>!precoProd(i.produto)).map(i=>i.produto); }
 function existeProd(n){ return produtos().includes(n); }
@@ -439,7 +445,7 @@ const AJUDAS={
  inv:{t:'Inventário',c:'<p>Contagem física do pátio. A partir da data dela, o saldo parte desses números; produção e saídas <b>anteriores</b> deixam de contar.</p><p>Os campos já vêm com o saldo atual — corrija só o que diferir.</p>'},
  orc_lista:{t:'Orçamentos',c:'<p>Todos os orçamentos salvos, do mais novo para o mais antigo. Busque por nº, cliente ou produto e filtre por situação.</p><p>Toque num orçamento para abrir, gerar PDF de novo, aprovar, duplicar ou excluir.</p>'},
  orc_comp:{t:'Composições',c:'<p>Produtos formados por várias peças, como fossas e caixas.</p><div class="ex">Ex.: FOSSA 2.722 L = 1 anel com fundo + 1 laje de tampa + 1 laje de inspeção.</div><p>No orçamento você escolhe só a composição; o preço é a soma das peças pela tabela, e na saída de estoque saem as peças.</p>'},
- orc_precos:{t:'Tabela de preços',c:'<p>Preço de venda de cada peça. É usado ao incluir produtos no orçamento e para calcular as composições.</p><p>Salva sozinho quando você sai do campo. Depois vamos poder puxar do motor de custos.</p>'},
+ orc_precos:{t:'Tabela de preços',c:'<p>Preço de venda de cada peça, usado no orçamento e nas composições.</p><p>Quando o produto tem <b>preço de venda no Preço Final do motor</b>, vale esse (marcado <b>motor</b>) — para mudar, altere lá no motor e aqui atualiza sozinho. Os outros (sem preço no motor e os de revenda) você digita aqui; salva ao sair do campo.</p>'},
  orc_cli:{t:'Clientes',c:'<p>Cadastro de clientes. Quem você coloca num orçamento é salvo aqui automaticamente, para escolher da lista na próxima vez.</p>'},
  orc_novo:{t:'Novo orçamento',c:'<p>O número é automático (sequência). Preencha cliente, itens e condições e toque em <b>Salvar e gerar PDF</b>.</p>'},
  orc_venda:{t:'Venda com ou sem nota',c:'<p><b>Com nota</b>: ao aprovar, o estoque <b>não</b> é mexido — a saída vem pelo arquivo do programa de notas.</p><p><b>Sem nota</b>: ao aprovar, o app dá a saída das peças no estoque.</p><p>É obrigatório escolher antes de aprovar.</p>'},
@@ -473,7 +479,8 @@ function fecharPicker(){ $('picker').classList.remove('on'); _pickCb=null; }
 let _pkLista=[];
 function pkRender(){
   const b=$('pk-busca').value.toLowerCase().trim();
-  _pkLista=produtos().filter(p=>!b || b.split(/\s+/).every(t=>p.toLowerCase().includes(t)));
+  const toks=b.split(/\s+/).filter(Boolean).map(t=>new RegExp('(^|[^0-9a-zà-öù-ú])'+t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i'));
+  _pkLista=produtos().filter(p=>toks.every(r=>r.test(p)));
   let h='', g='';
   _pkLista.forEach((p,i)=>{ const c=categoria(p); if(c!==g){ g=c; h+='<div class="pk-g">'+c+'</div>'; }
     h+='<div class="pk-i" onclick="pkEscolher('+i+')"><span>'+esc(p)+(ehRevenda(p)?' <i style="color:var(--blue);font-size:.72rem">revenda</i>':'')+'</span>'+(_pickPreco?'<b>'+(precoProd(p)?fmtR(precoProd(p)):'<i>sem preço</i>')+'</b>':'')+'</div>'; });
@@ -1300,7 +1307,9 @@ function vPrecos(){
   const rv=Object.values(S.revenda||{}).filter(Boolean).sort((a,b)=>a.nome.localeCompare(b.nome,'pt-BR'));
   h+='<div class="card"><h3>Produtos de revenda'+hq('revenda')+'<span class="r"><button class="btn sm sec" onclick="addRevenda()">+ adicionar</button></span></h3>'+(rv.length?rv.map(r=>'<div class="prc" style="grid-template-columns:1fr 34px"><span>'+esc(r.nome)+'</span><button class="btn sm sec" onclick="rmRevenda(\''+r.id+'\')">✕</button></div>').join(''):'<div class="mut">Nenhum. Produtos comprados prontos para revender, que não passam pelo motor.</div>')+'</div><div class="card">';
   let g='';
-  _listaPrecos.forEach((p,i)=>{ const c=categoria(p); if(c!==g){ g=c; h+='<div class="grp">'+c+'</div>'; } h+='<div class="prc"><span>'+esc(p)+'</span><input inputmode="decimal" value="'+(precoProd(p)?fmtV(precoProd(p)):'')+'" placeholder="R$" onchange="salvarPreco('+i+',this.value)"></div>'; });
+  _listaPrecos.forEach((p,i)=>{ const c=categoria(p); if(c!==g){ g=c; h+='<div class="grp">'+c+'</div>'; } const pm=precoMotor(p), pg=precoGestao(p);
+    if(pm) h+='<div class="prc"><span>'+esc(p)+' <span class="tag nota">motor</span>'+(pg&&Math.abs(pg-pm)>0.004?'<br><small class="mut">tabela da gestão: '+fmtR(pg)+' (não usado)</small>':'')+'</span><b style="text-align:right">'+fmtR(pm)+'</b></div>';
+    else h+='<div class="prc"><span>'+esc(p)+'</span><input inputmode="decimal" value="'+(pg?fmtV(pg):'')+'" placeholder="R$" onchange="salvarPreco('+i+',this.value)"></div>'; });
   return h+'</div>';
 }
 function vCli(){
