@@ -207,7 +207,7 @@ body.arrastando{user-select:none;-webkit-user-select:none;overflow-anchor:none}
 // Firebase: mesmo projeto do FROTA e do motor (gestao-de-frota-pedroni),
 // dados no ramo /gestao. Lê do motor: custos/mp/produtos e custos/mo/prodReal.
 // =====================================================================
-const VERSAO = 'v11';
+const VERSAO = 'v12';
 const firebaseConfig = {
   apiKey: "AIzaSyBqX8iLAtPTPHMIIHEBg3sGsDPVdHKq24U",
   authDomain: "gestao-de-frota-pedroni.firebaseapp.com",
@@ -403,6 +403,7 @@ function finSemana(ini){
 
 // ---------- AJUDAS ("?") ----------
 const AJUDAS={
+ cli_campos:{t:'Cadastro do cliente',c:'<p>Os campos seguem o bloco <b>Destinatário</b> da nota fiscal: razão social, CNPJ/CPF, inscrição estadual, endereço separado (rua, número, bairro, CEP), município, UF e fone.</p><p>Além disso: código no sistema, celular, e-mail, <b>local da obra</b> (sai no orçamento) e um campo livre de contatos/observação.</p>'},
  orc_resp:{t:'Responsável pelo orçamento',c:'<p>Quem fez o orçamento. Sai no PDF (no cabeçalho, em "Atendimento" com o telefone, e na assinatura) e aparece na lista para você saber quem atendeu.</p><p>A equipe é cadastrada em <b>Ajustes</b> (círculo PE). O app lembra quem usou por último neste aparelho.</p>'},
  comp_imp:{t:'Importar planilha de composições',c:'<p>Lê a planilha de composições (uma aba para cada grupo: fossas, filtros, sumidouros, cisternas, caixas) e cadastra tudo de uma vez: as <b>composições</b> com suas peças e o <b>preço de cada peça</b> na tabela de preços.</p><p>Pode importar de novo quando mudar preços ou peças: composições com o mesmo nome são atualizadas, sem duplicar.</p><div class="ex">Peças que não existem no motor viram <b>produtos de revenda</b>.</div>'},
  revenda:{t:'Produtos de revenda',c:'<p>Produtos que vocês <b>compram prontos</b> para revender (não são produzidos, então não estão no motor de custos).</p><p>Aparecem na lista de produtos normalmente: dá para pôr preço, usar em composições e orçamentos e controlar estoque (a entrada é pelo botão <b>Entrada / ajuste</b> do estoque, já que não têm produção).</p>'},
@@ -806,6 +807,7 @@ const IMP_CAMPOS=[
   ['fone','Telefone',['telefone','fone','telefone1','fone1','tel','telefones','telcomercial','fonecomercial']],
   ['cel','Celular / WhatsApp',['celular','whatsapp','telefone2','fone2','cel','movel']],
   ['email','E-mail',['email','emailnfe','emailprincipal','mail']],
+  ['ie','Inscrição estadual',['ie','inscricaoestadual','inscestadual','insestadual','rgie','ierg']],
   ['logr','Endereço (rua)',['endereco','logradouro','rua','enderecocompleto','end']],
   ['num','Número',['numero','num','nro','no','n']],
   ['compl','Complemento',['complemento','compl']],
@@ -906,10 +908,9 @@ function assinatura(cab){ return _encKey(cab.map(_normH).join('|')).slice(0,180)
 function impCliente(r){
   const g=k=>{ const i=IMP.mapa[k]; return (i==null||i==='')?'':String(r[+i]||'').trim(); };
   const nome=g('nome')||g('fantasia'); if(!nome) return null;
-  let end=g('logr'); if(g('num')) end+=(end?', ':'')+g('num'); if(g('compl')) end+=' - '+g('compl'); if(g('bairro')) end+=(end?' - ':'')+g('bairro'); if(g('cep')) end+=(end?' · ':'')+'CEP '+g('cep');
-  let cid=g('cidade'); if(g('uf')) cid+=(cid?' / ':'')+g('uf').toUpperCase();
-  const fones=[g('fone'),g('cel')].filter(Boolean);
-  const c={nome, doc:g('doc'), fone:Array.from(new Set(fones)).join(' / '), email:g('email').toLowerCase(), end, cidade:cid, codigo:g('codigo')};
+  const c={nome, codigo:g('codigo'), doc:g('doc'), ie:g('ie'), logr:g('logr'), num:g('num'), compl:g('compl'), bairro:g('bairro'), cep:g('cep'),
+    municipio:g('cidade'), uf:g('uf').toUpperCase(), fone:g('fone'), cel:(g('cel')&&g('cel')!==g('fone'))?g('cel'):'', email:g('email').toLowerCase()};
+  cliCompor(c);
   if(g('fantasia') && g('fantasia')!==nome) c.fantasia=g('fantasia');
   return c;
 }
@@ -1000,7 +1001,18 @@ const MIGRACOES=[{flag:'nomes_2411', mapa:RENOMEAR_2411, solto:false},{flag:'nom
   {flag:'tubo_singular', regra:n=>(n && /^TUBOS\s/i.test(n)) ? ('TUBO '+String(n).slice(6)).replace(/\s+/g,' ').trim() : n}];
 let _carregados=new Set(), _migrou=false;
 function _marcaCarregado(c){ _carregados.add(c); if(!_migrou && COLS.every(x=>_carregados.has(x))){ _migrou=true; migrarNomesGestao(); } }
-async function migrarNomesGestao(){ for(const m of MIGRACOES) await migrarNomesLista(m); }
+async function migrarNomesGestao(){ for(const m of MIGRACOES) await migrarNomesLista(m); await migrarCamposClientes(); }
+async function migrarCamposClientes(){
+  try{
+    if(DEMO){ if(localStorage.getItem('gestao_mig_cli_campos')) return; }
+    else{ if((await fb.get(fb.ref(db,'gestao/migracoes/cli_campos'))).exists()) return; }
+    const lote={};
+    Object.values(S.clientes).forEach(c=>{ if(c && !c.logr && !c.municipio && (c.end||c.cidade)){ lote[c.id]=cliCompor(cliSeparar(c)); } });
+    if(Object.keys(lote).length) salvarLote('clientes', lote);
+    if(DEMO) localStorage.setItem('gestao_mig_cli_campos','1');
+    else await fb.set(fb.ref(db,'gestao/migracoes/cli_campos'), {em:Date.now(), clientes:Object.keys(lote).length});
+  }catch(e){ console.error('migração clientes', e); }
+}
 async function migrarNomesLista(mig){
   try{
     if(DEMO){ if(localStorage.getItem('gestao_mig_'+mig.flag)) return; }
@@ -1327,8 +1339,8 @@ function vCfg(){
   const v=k=>esc(c[k]||'');
   return '<div class="card"><h3>Dados da empresa (cabeçalho do orçamento)'+hq('cfg_emp')+'</h3>'+
   '<label class="f">Razão social</label><input id="cf-nome" value="'+(c.nome!=null?v('nome'):'Artefatos de Cimento Pedroni Ltda.')+'">'+
-  '<div class="g2"><div><label class="f">CNPJ</label><input id="cf-cnpj" value="'+v('cnpj')+'"></div><div><label class="f">Inscrição estadual</label><input id="cf-ie" value="'+v('ie')+'"></div></div>'+
-  '<label class="f">Endereço</label><input id="cf-end" value="'+v('end')+'">'+
+  '<div class="g2"><div><label class="f">CNPJ</label><input id="cf-cnpj" value="'+(c.cnpj?v('cnpj'):CONTATO_PADRAO.cnpj)+'"></div><div><label class="f">Inscrição estadual</label><input id="cf-ie" value="'+(c.ie?v('ie'):CONTATO_PADRAO.ie)+'"></div></div>'+
+  '<label class="f">Endereço</label><input id="cf-end" value="'+(c.end?v('end'):CONTATO_PADRAO.end)+'">'+
   '<div class="g2"><div><label class="f">Cidade / UF</label><input id="cf-cid" value="'+(c.cid!=null?v('cid'):CONTATO_PADRAO.cid)+'"></div><div><label class="f">Telefone / WhatsApp</label><input id="cf-fone" value="'+(c.fone!=null?v('fone'):CONTATO_PADRAO.fone)+'"></div></div>'+
   '<label class="f">E-mail</label><input id="cf-mail" value="'+(c.mail!=null?v('mail'):CONTATO_PADRAO.mail)+'">'+
   '<label class="f">Logo (imagem)'+hq('cfg_logo')+'</label><input type="file" accept="image/*" onchange="carregaLogo(this)">'+
@@ -1521,25 +1533,55 @@ function salvarComp(){
 
 // ---------- cliente ----------
 let KE=null;
-const CLI_CAMPOS=[['nome','Nome / razão social'],['codigo','Código no sistema'],['doc','CPF / CNPJ'],['fone','Telefone'],['email','E-mail'],['end','Endereço'],['cidade','Cidade / UF'],['obra','Local da obra / entrega']];
+// Campos iguais ao bloco DESTINATÁRIO da NF-e (+ código, celular, e-mail, obra e observação)
+const CLI_CAMPOS=[['nome','Nome / razão social'],['codigo','Código no sistema'],['doc','CNPJ / CPF'],['ie','Inscrição estadual'],
+  ['logr','Endereço (rua / avenida)'],['num','Número'],['compl','Complemento'],['bairro','Bairro / distrito'],['cep','CEP'],
+  ['municipio','Município'],['uf','UF'],['fone','Fone / fax'],['cel','Celular / WhatsApp'],['email','E-mail'],
+  ['obra','Local da obra / entrega'],['obs','Contatos / observação']];
+// disposição na tela: linhas com 1 ou 2 campos
+const CLI_LAYOUT=[['nome'],['codigo','doc'],['ie','fone'],['cel','email'],['logr'],['num','compl'],['bairro','cep'],['municipio','uf'],['obra'],['obs']];
+const CLI_ROT=Object.fromEntries(CLI_CAMPOS);
+function cliFormHTML(pref, obj, onin){
+  return CLI_LAYOUT.map(lin=>{
+    const cel=k=>'<div><label class="f">'+CLI_ROT[k]+'</label><input id="'+pref+k+'" value="'+esc(obj[k]||'')+'"'+(k==='uf'?' maxlength="2" style="text-transform:uppercase"':'')+(onin?' oninput="'+onin.replace('#K',k)+'"':'')+'></div>';
+    return lin.length>1?'<div class="g2">'+lin.map(cel).join('')+'</div>':cel(lin[0]);
+  }).join('');
+}
+// endereço e cidade montados (usados no PDF, entregas e busca)
+function cliEnd(c){ if(!c) return ''; if(!c.logr&&!c.bairro&&!c.cep) return c.end||'';
+  let e=c.logr||''; if(c.num) e+=(e?', ':'')+c.num; if(c.compl) e+=' - '+c.compl; if(c.bairro) e+=(e?' - ':'')+c.bairro; if(c.cep) e+=(e?' · ':'')+'CEP '+c.cep; return e; }
+function cliCidade(c){ if(!c) return ''; if(!c.municipio&&!c.uf) return c.cidade||''; return [c.municipio, (c.uf||'').toUpperCase()].filter(Boolean).join(' / '); }
+function cliCompor(c){ c.uf=(c.uf||'').toUpperCase(); const e=cliEnd(c), ci=cliCidade(c); if(e) c.end=e; if(ci) c.cidade=ci; return c; }
+// endereço antigo (campo único) → campos separados
+function cliSeparar(c){
+  const x=Object.assign({},c);
+  if(!x.municipio && x.cidade){ const m=String(x.cidade).split(/\s*\/\s*/); x.municipio=m[0]||''; if(m[1]&&m[1].length===2) x.uf=m[1].toUpperCase(); }
+  if(!x.logr && x.end){
+    let e=String(x.end); const mc=e.match(/\s*·\s*CEP\s*(.+)$/i); if(mc){ x.cep=x.cep||mc[1].trim(); e=e.slice(0,mc.index); }
+    const partes=e.split(' - '); const cab=partes.shift()||'';
+    if(partes.length){ x.bairro=x.bairro||partes.pop(); if(partes.length) x.compl=x.compl||partes.join(' - '); }
+    const mn=cab.match(/^(.*),\s*([^,]+)$/); if(mn){ x.logr=mn[1].trim(); x.num=x.num||mn[2].trim(); } else x.logr=cab.trim();
+  }
+  return x;
+}
 function abrirCli(id){
-  KE=id?Object.assign({},S.clientes[id]):{id:null};
-  abrirModal('<h2>'+(id?'Editar cliente':'Novo cliente')+'<button class="ico x" onclick="fecharModal()">✕</button></h2>'+
-    CLI_CAMPOS.map(([k,t])=>'<label class="f">'+t+'</label><input id="ke-'+k+'" value="'+esc(KE[k]||'')+'">').join('')+
+  KE=id?cliSeparar(S.clientes[id]):{id:null};
+  abrirModal('<h2>'+(id?'Editar cliente':'Novo cliente')+hq('cli_campos')+'<button class="ico x" onclick="fecharModal()">✕</button></h2>'+
+    cliFormHTML('ke-', KE)+
     '<div class="mfoot"><button class="btn" onclick="salvarCli()">Salvar</button><button class="btn sec" onclick="fecharModal()">Cancelar</button>'+(id?'<button class="btn bad" style="margin-left:auto" onclick="if(confirm(\'Excluir este cliente?\')){excluir(\'clientes\',KE.id);fecharModal()}">Excluir</button>':'')+'</div>');
 }
 function salvarCli(){
   const c={}; CLI_CAMPOS.forEach(([k])=>c[k]=$('ke-'+k).value.trim());
   if(!c.nome){ alert('Informe o nome.'); return; }
-  c.id=KE.id||uid(); salvar('clientes', c.id, Object.assign({}, KE.id?S.clientes[KE.id]:{}, c)); fecharModal();
+  c.id=KE.id||uid(); salvar('clientes', c.id, cliCompor(Object.assign({}, KE.id?S.clientes[KE.id]:{}, c))); fecharModal();
 }
 function upsertCliente(cli){
   if(!cli||!cli.nome) return;
   const L=Object.values(S.clientes).filter(Boolean);
   const ex=(cli.doc&&L.find(c=>c.doc&&c.doc===cli.doc)) || L.find(c=>(c.nome||'').toLowerCase()===cli.nome.toLowerCase());
   const id=ex?ex.id:uid();
-  const novo=Object.assign({}, ex||{}, cli, {id});
-  if(!ex || CLI_CAMPOS.some(([k])=>(ex[k]||'')!==(novo[k]||''))) salvar('clientes', id, novo);
+  const novo=cliCompor(Object.assign({}, ex||{}, cli, {id}));
+  if(!ex || CLI_CAMPOS.concat([['end'],['cidade']]).some(([k])=>(ex[k]||'')!==(novo[k]||''))) salvar('clientes', id, novo);
 }
 
 // ---------- ORÇAMENTO (editor) ----------
@@ -1550,6 +1592,7 @@ function abrirOrc(id, duplicar){
   if(id){
     OE=JSON.parse(JSON.stringify(S.orcamentos[id]));
     OE.itens=arr(OE.itens).map(i=>Object.assign(i,{comp:arr(i.comp)}));
+    OE.cliente=cliSeparar(OE.cliente||{});
     if(duplicar){ OE.id=null; OE.numero=null; OE.data=hoje(); OE.status='aberto'; OE.baixaEstoque=''; }
   }else{
     OE={id:null, numero:null, data:hoje(), validade:c.validade||15, cliente:{}, itens:[], descontoPct:0, frete:0,
@@ -1588,7 +1631,7 @@ function oeRender(){
     '<div class="mut" style="margin-top:4px">Com nota: o estoque baixa pelo arquivo. Sem nota: ao aprovar, o app dá a saída das peças.</div>';
   h+='<div class="grp">Cliente'+hq('orc_cliente')+'</div>';
   if(clis.length) h+='<button type="button" class="pickf vazio" onclick="abrirPickerCli(oeCliObj)"><span>Escolher cliente cadastrado ('+clis.length+')…</span><b>▾</b></button>';
-  h+=CLI_CAMPOS.map(([k,t])=>'<label class="f">'+t+'</label><input id="oc-'+k+'" value="'+esc(cli[k]||'')+'" oninput="OE.cliente.'+k+'=this.value">').join('');
+  h+=cliFormHTML('oc-', cli, 'OE.cliente.#K=this.value');
   h+='<div class="grp">Itens'+hq('orc_itens')+'</div>';
   h+=o.itens.length?o.itens.map((i,k)=>'<div class="oel"><div class="nm"><span>'+(i.tipo==='comp'?'<span class="tag nota">composição</span> ':'')+esc(i.nome)+'</span><button class="btn sm sec" onclick="OE.itens.splice('+k+',1);oeRender()">✕</button></div>'+
     (i.tipo==='comp'?'<div class="cp">'+i.comp.map(c=>fmtN(c.qtd)+'× '+esc(c.produto)).join(' + ')+'</div>':'')+
@@ -1617,8 +1660,8 @@ function oeTot(){
   OE.itens.forEach((i,k)=>{ const el=$('oe-lt-'+k); if(el) el.textContent=fmtR(parseNum(i.qtd)*parseNum(i.unit)); });
   $('oe-tot').innerHTML='<div class="kv">Subtotal<b>'+fmtR(t.sub)+'</b></div>'+(t.desc?'<div class="kv">Desconto<b class="neg">−'+fmtR(t.desc)+'</b></div>':'')+(t.frete?'<div class="kv">Frete<b>'+fmtR(t.frete)+'</b></div>':'')+'<div class="kv big">Total<b>'+fmtR(t.total)+'</b></div>';
 }
-function oeCliObj(c){ OE.cliente={}; CLI_CAMPOS.forEach(([k])=>{ OE.cliente[k]=c[k]||''; const el=$('oc-'+k); if(el) el.value=c[k]||''; }); }
-function oeCli(id){ const c=S.clientes[id]; if(!c) return; OE.cliente={}; CLI_CAMPOS.forEach(([k])=>{ OE.cliente[k]=c[k]||''; $('oc-'+k).value=c[k]||''; }); }
+function oeCliObj(c){ c=cliSeparar(c); OE.cliente={}; CLI_CAMPOS.forEach(([k])=>{ OE.cliente[k]=c[k]||''; const el=$('oc-'+k); if(el) el.value=c[k]||''; }); }
+function oeCli(id){ const c=S.clientes[id]&&cliSeparar(S.clientes[id]); if(!c) return; OE.cliente={}; CLI_CAMPOS.forEach(([k])=>{ OE.cliente[k]=c[k]||''; $('oc-'+k).value=c[k]||''; }); }
 function oeAddProd(n){
   if(!n) return;
   OE.itens.push({tipo:'prod', nome:n, qtd:1, unit:precoProd(n)});
@@ -1634,7 +1677,7 @@ function oeAddComp(){
 }
 function oeMontar(){
   const o=OE, t=oeTotais();
-  const cli={}; CLI_CAMPOS.forEach(([k])=>cli[k]=String((o.cliente||{})[k]||'').trim());
+  const cli={}; CLI_CAMPOS.forEach(([k])=>cli[k]=String((o.cliente||{})[k]||'').trim()); cliCompor(cli);
   const itens=o.itens.map(i=>{ const x={tipo:i.tipo, nome:i.nome, qtd:parseNum(i.qtd), unit:parseNum(i.unit)}; if(i.tipo==='comp'){ x.comp=arr(i.comp); x.descricao=i.descricao||''; x.compId=i.compId||''; } return x; }).filter(i=>i.qtd>0);
   return Object.assign({}, o, {cliente:cli, itens, validade:parseInt(o.validade)||15, descontoPct:parseNum(o.descontoPct), frete:parseNum(o.frete), subtotal:t.sub, desconto:t.desc, total:t.total});
 }
@@ -1689,8 +1732,9 @@ function sincBaixa(o){
 // =====================================================================
 // ---------- identidade visual (logo A=P Pedroni) ----------
 const MARCA={verm:'#c8202a', vermC:'#d83a2b', cinza:'#dcddde', cinzaC:'#f1f1f2', preto:'#231f20'};
-const CONTATO_PADRAO={nome:'Artefatos de Cimento Pedroni Ltda.', cid:'Caxias do Sul / RS', fone:'(54) 99613-0440', mail:'artefatospedroni@gmail.com'};
-function cfgEmp(){ const c=S.config||{}; const o={}; ['nome','cid','fone','mail'].forEach(k=>o[k]=(c[k]!=null&&c[k]!=='')?c[k]:CONTATO_PADRAO[k]); ['cnpj','ie','end'].forEach(k=>o[k]=c[k]||''); o.logo=c.logo||LOGO_PADRAO; o.obs=c.obs||''; return o; }
+const CONTATO_PADRAO={nome:'Artefatos de Cimento Pedroni Ltda.', cid:'Caxias do Sul / RS', fone:'(54) 99613-0440', mail:'artefatospedroni@gmail.com',
+  cnpj:'87.193.215/0001-54', ie:'029/0090768', end:'Estrada Municipal do Vinho, 2569 - Esplanada · CEP 95095-101'};
+function cfgEmp(){ const c=S.config||{}; const o={}; ['nome','cid','fone','mail'].forEach(k=>o[k]=(c[k]!=null&&c[k]!=='')?c[k]:CONTATO_PADRAO[k]); ['cnpj','ie','end'].forEach(k=>o[k]=(c[k]!=null&&c[k]!=='')?c[k]:CONTATO_PADRAO[k]); o.logo=c.logo||LOGO_PADRAO; o.obs=c.obs||''; return o; }
 const PRINT_CSS='*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,Helvetica,sans-serif;color:'+MARCA.preto+';font-size:11px;background:#e6e6e8;-webkit-print-color-adjust:exact;print-color-adjust:exact}'+
  '.pg{background:#fff;width:210mm;min-height:297mm;margin:0 auto;padding:12mm 13mm 14mm;display:flex;flex-direction:column}'+
  '.bar{position:sticky;top:0;background:#1c1f26;padding:10px;text-align:center;z-index:5}.bar button{background:'+MARCA.verm+';color:#fff;border:none;border-radius:8px;padding:10px 18px;font-size:15px;font-weight:700;cursor:pointer}'+
@@ -1737,8 +1781,10 @@ function pdfOrcamento(o, w){
   let h=cabecalho('ORÇAMENTO', 'Nº '+numOrc(o.numero), [['Data',fmtD(o.data)],['Válido até',fmtD(val)]].concat(rs.nome?[['Responsável',esc(rs.nome)]]:[]));
   h+='<div class="box"><h4>Cliente</h4><div class="cg">'+
     '<div style="grid-column:1/3;font-size:12.5px;margin-bottom:2px"><b>'+esc(cli.nome||'—')+'</b></div>'+
-    (cli.doc?'<div><span>CPF/CNPJ:</span> '+esc(cli.doc)+'</div>':'')+(cli.fone?'<div><span>Telefone:</span> '+esc(cli.fone)+'</div>':'')+
-    (cli.email?'<div><span>E-mail:</span> '+esc(cli.email)+'</div>':'')+(cli.end||cli.cidade?'<div><span>Endereço:</span> '+esc([cli.end,cli.cidade].filter(Boolean).join(' — '))+'</div>':'')+
+    (cli.doc?'<div><span>CNPJ/CPF:</span> '+esc(cli.doc)+'</div>':'')+(cli.ie?'<div><span>Insc. estadual:</span> '+esc(cli.ie)+'</div>':'')+
+    (cli.fone||cli.cel?'<div><span>Fone:</span> '+esc([cli.fone,cli.cel].filter(Boolean).join(' / '))+'</div>':'')+(cli.email?'<div><span>E-mail:</span> '+esc(cli.email)+'</div>':'')+
+    ((cli.logr||cli.end)?'<div style="grid-column:1/3"><span>Endereço:</span> '+esc(cli.logr?[cli.logr+(cli.num?', '+cli.num:'')+(cli.compl?' - '+cli.compl:''), cli.bairro, cli.cep?'CEP '+cli.cep:''].filter(Boolean).join(' — '):cli.end)+'</div>':'')+
+    (cliCidade(cli)?'<div><span>Município / UF:</span> '+esc(cliCidade(cli))+'</div>':'')+
     (cli.obra?'<div style="grid-column:1/3"><span>Local da obra / entrega:</span> '+esc(cli.obra)+'</div>':'')+'</div></div>';
   h+='<table class="it"><thead><tr><th style="width:26px">#</th><th>Descrição</th><th class="r">Qtd</th><th class="r">Unitário</th><th class="r">Total</th></tr></thead><tbody>'+
     arr(o.itens).map((i,k)=>'<tr><td>'+(k+1)+'</td><td><b>'+esc(i.nome)+'</b>'+(i.descricao?'<div class="cp">'+esc(i.descricao)+'</div>':'')+
